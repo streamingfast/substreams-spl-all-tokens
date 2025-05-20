@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+import "google/protobuf/descriptor.proto";
+import "sf/substreams/sink/sql/schema/v1/schema.proto";
+import "parquet/options.proto";
+
+package sf.solana.spl.v1.type;
+
+message SplInstructions {
+  repeated Instruction instructions = 1;
+}
+
+message Instruction {
+  option (schema.table) = {
+    name: "instructions"
+  };
+
+  string instruction_id = 1 [(schema.field) = {primary_key: true}];
+  string transaction_hash = 2;
+
+  oneof Item {
+    InitializeMint initialize_mint = 10;
+    Mint mint = 11;
+    Burn burn = 12;
+    Transfer transfer = 13;
+    InitializedAccount initialized_account = 14;
+  }
+}
+
+message InitializeMint {
+  option (parquet.table_name) = "initialize_mints";
+  option (schema.table) = {
+    name: "initialize_mints"
+    child_of: "instructions on instruction_id"
+  };
+
+  string mint_address = 1;
+  uint64 decimals = 2;
+  string mint_authority = 3;
+  string freeze_authority = 4;
+}
+
+message Transfer {
+  option (parquet.table_name) = "transfers";
+  option (schema.table) = {
+    name: "transfers"
+    child_of: "instructions on instruction_id"
+  };
+
+  string from = 2;
+  string to = 3;
+  uint64 amount = 4;
+}
+
+message Mint {
+  option (parquet.table_name) = "mints";
+  option (schema.table) = {
+    name: "mints"
+    child_of: "instructions on instruction_id"
+  };
+
+  string mint_address = 1;
+  string to = 2;
+  uint64 amount = 3;
+}
+
+message Burn {
+  option (parquet.table_name) = "burns";
+  option (schema.table) = {
+    name: "burns"
+    child_of: "instructions on instruction_id"
+  };
+
+  string mint_address = 1;
+  string from = 2;
+  uint64 amount = 3;
+}
+
+message InitializedAccount {
+  option (parquet.table_name) = "initialized_accounts";
+  option (schema.table) = {
+    name: "initialized_accounts"
+    child_of: "instructions on instruction_id"
+  };
+
+  string account = 1 [(schema.field) = {primary_key: true}];
+  string mint_address = 2;
+  string owner = 3;
+}

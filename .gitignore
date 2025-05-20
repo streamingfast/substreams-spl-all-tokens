@@ -1,0 +1,10 @@
+.envrc
+.idea
+/target/
+*.spkg
+*~
+/env/
+/build
+replay.log
+/dbt/target/
+/dbt/logs/
