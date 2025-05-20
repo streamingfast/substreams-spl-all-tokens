@@ -46,7 +46,6 @@ impl OutputInstructions {
 #[substreams::handlers::map]
 fn map_spl_instructions(params: String, transactions: solTransactions) -> Result<SplInstructions, Error> {
     let mut instructions: Vec<Instruction> = vec![];
-    log::info!("map_spl_instructions");
     for confirmed_trx in transactions_owned(transactions) {
         let hash = bs58::encode(confirmed_trx.hash()).into_string();
 
@@ -74,15 +73,7 @@ fn transactions_owned(transactions: solTransactions) -> impl Iterator<Item = Con
 fn process_instruction(output: &mut OutputInstructions, compile_instruction: &InstructionView) {
     let trx_hash = &bs58::encode(compile_instruction.transaction().hash()).into_string();
     match compile_instruction.program_id().to_string().as_ref() {
-        SOLANA_TOKEN_PROGRAM_KEG => {
-            match process_token_instruction(output, compile_instruction, compile_instruction.meta()) {
-                Err(err) => {
-                    panic!("trx_hash {} process token instructions: {}", trx_hash, err);
-                }
-                _ => {}
-            }
-        }
-        SOLANA_TOKEN_PROGRAM_ZQB => {
+        SOLANA_TOKEN_PROGRAM_KEG | SOLANA_TOKEN_PROGRAM_ZQB => {
             match process_token_instruction(output, compile_instruction, compile_instruction.meta()) {
                 Err(err) => {
                     panic!("trx_hash {} process token instructions: {}", trx_hash, err);
@@ -104,18 +95,14 @@ fn process_inner_instruction(
 ) {
     for inner in compile_instruction.inner_instructions() {
         match inner.program_id().to_string().as_ref() {
-            SOLANA_TOKEN_PROGRAM_KEG => match process_token_instruction(output, &inner, meta) {
-                Err(err) => {
-                    panic!("trx_hash {} process token instructions {}", trx_hash, err);
+            SOLANA_TOKEN_PROGRAM_KEG | SOLANA_TOKEN_PROGRAM_ZQB => {
+                match process_token_instruction(output, &inner, meta) {
+                    Err(err) => {
+                        panic!("trx_hash {} process token instructions {}", trx_hash, err);
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
-            SOLANA_TOKEN_PROGRAM_ZQB => match process_token_instruction(output, &inner, meta) {
-                Err(err) => {
-                    panic!("trx_hash {} process token instructions {}", trx_hash, err);
-                }
-                _ => {}
-            },
+            }
             _ => {}
         }
     }
@@ -161,9 +148,7 @@ fn process_token_instruction(
             }
             TokenInstruction::Transfer { amount: amt } => {
                 let source = &instruction.accounts()[0];
-                // let source = &accounts[inst_accounts[0] as usize];
                 let destination = &instruction.accounts()[1];
-                // let destination = &accounts[inst_accounts[1] as usize];
 
                 output.add(Item::Transfer(Transfer {
                     from: source.to_string(),
@@ -173,7 +158,6 @@ fn process_token_instruction(
             }
 
             TokenInstruction::TransferChecked { amount: amt, .. } => {
-                let mint = &instruction.accounts()[1];
                 let source = &instruction.accounts()[0];
                 let destination = &instruction.accounts()[2];
 
