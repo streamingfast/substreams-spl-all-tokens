@@ -9,7 +9,6 @@ use crate::pb::sf::solana::spl::v1::r#type::{
 use pb::sol::transactions::v1::Transactions as solTransactions;
 use std::ops::Div;
 use substreams::errors::Error;
-use substreams::log;
 use substreams_solana::block_view::InstructionView;
 use substreams_solana::pb::sf::solana::r#type::v1::{ConfirmedTransaction, TransactionStatusMeta};
 use substreams_solana_program_instructions::token_instruction_2022::TokenInstruction;
@@ -147,25 +146,29 @@ fn process_token_instruction(
                 }));
             }
             TokenInstruction::Transfer { amount: amt } => {
-                let source = &instruction.accounts()[0];
-                let destination = &instruction.accounts()[1];
+                if amt > 0 {
+                    let source = &instruction.accounts()[0];
+                    let destination = &instruction.accounts()[1];
 
-                output.add(Item::Transfer(Transfer {
-                    from: source.to_string(),
-                    to: destination.to_string(),
-                    amount: amt,
-                }));
+                    output.add(Item::Transfer(Transfer {
+                        from: source.to_string(),
+                        to: destination.to_string(),
+                        amount: amt,
+                    }));
+                }
             }
 
             TokenInstruction::TransferChecked { amount: amt, .. } => {
-                let source = &instruction.accounts()[0];
-                let destination = &instruction.accounts()[2];
+                if amt > 0 {
+                    let source = &instruction.accounts()[0];
+                    let destination = &instruction.accounts()[2];
 
-                output.add(Item::Transfer(Transfer {
-                    from: source.to_string(),
-                    to: destination.to_string(),
-                    amount: amt,
-                }));
+                    output.add(Item::Transfer(Transfer {
+                        from: source.to_string(),
+                        to: destination.to_string(),
+                        amount: amt,
+                    }));
+                }
             }
 
             TokenInstruction::MintTo { amount: amt } | TokenInstruction::MintToChecked { amount: amt, .. } => {
