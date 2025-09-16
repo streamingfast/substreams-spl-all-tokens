@@ -5,16 +5,15 @@ package:
   url: https://github.com/streamingfast/substreams-spl-all-tokens
 
 imports:
-  solana_common: https://github.com/streamingfast/substreams-foundational-modules/releases/download/solana-common-v0.3.0/solana-common-v0.3.0.spkg
+  solana_common: solana-common@v0.3.0
+  spl_owner_foundational: https://github.com/streamingfast/substreams-foundational-modules/releases/download/solana-accounts-foundational-v0.1.2/spl-initialized-account-v0.1.2.spkg
 
 protobuf:
   files:
     - sf/solana/v1/spl/type/spl.proto
-    - parquet/options.proto
   descriptorSets:
     - module: buf.build/streamingfast/substreams-sink-sql
   excludePaths:
-    #    - sf/substreams
     - google
   importPaths:
     - ./proto
@@ -22,15 +21,15 @@ protobuf:
 binaries:
   default:
     type: wasm/rust-v1
-    file: target/wasm32-unknown-unknown/release/substreams_hivemapper.wasm
+    file: target/wasm32-unknown-unknown/release/substreams.wasm
 
 modules:
   - name: map_spl_instructions
     kind: map
     initialBlock: 31310775
     inputs:
-      - params: string
       - map: solana_common:transactions_by_programid_without_votes
+      - foundational-store: spl-initialized-account@v0.1.2
     output:
       type: proto:sf.solana.spl.v1.type.SplInstructions
 
@@ -38,12 +37,3 @@ network: solana
 
 params:
   solana_common:transactions_by_programid_without_votes: "program:TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA || program:TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
-
-sink:
-  module: map_spl_instructions
-  type: sf.substreams.sink.sql.v1.Service
-  config:
-    dbt_config:
-      files: ./dbt
-      run_interval_seconds: 300
-      enabled: false

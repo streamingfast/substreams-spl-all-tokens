@@ -2,13 +2,16 @@ mod constants;
 mod pb;
 
 use crate::pb::sf::solana::spl::v1::r#type::instruction::Item;
-use crate::pb::sf::solana::spl::v1::r#type::{
-    Burn, InitializeMint, InitializedAccount, Instruction, Mint, SplInstructions, Transfer,
-};
-
+use crate::pb::sf::solana::spl::v1::r#type::{Burn, InitializeMint, InitializedAccount, Instruction, Mint, SplInstructions, Transfer};
 use pb::sol::transactions::v1::Transactions as solTransactions;
-use std::ops::Div;
+use std::collections::{HashMap, HashSet};
 use substreams::errors::Error;
+use prost::Message;
+
+use pb::sf::substreams::foundational_store::v1::ResponseCode;
+use crate::pb::sf::substreams::solana::spl::v1::AccountOwner;
+use substreams::store::FoundationalStore;
+
 use substreams_solana::block_view::InstructionView;
 use substreams_solana::pb::sf::solana::r#type::v1::{ConfirmedTransaction, TransactionStatusMeta};
 use substreams_solana_program_instructions::token_instruction_2022::TokenInstruction;
@@ -43,8 +46,9 @@ impl OutputInstructions {
 }
 
 #[substreams::handlers::map]
-fn map_spl_instructions(params: String, transactions: solTransactions) -> Result<SplInstructions, Error> {
+fn map_spl_instructions(transactions: solTransactions, foundational_store: FoundationalStore) -> Result<SplInstructions, Error> {
     let mut instructions: Vec<Instruction> = vec![];
+
     for confirmed_trx in transactions_owned(transactions) {
         let hash = bs58::encode(confirmed_trx.hash()).into_string();
 
@@ -56,7 +60,86 @@ fn map_spl_instructions(params: String, transactions: solTransactions) -> Result
 
         instructions.extend(output_instructions.instructions);
     }
+
+    let mut accounts_to_lookup = HashSet::<String>::new();
+
+    for instruction in &instructions {
+        if let Some(ref item) = instruction.item {
+            match item {
+                Item::Transfer(transfer) => {
+                    accounts_to_lookup.insert(transfer.from.clone());
+                    accounts_to_lookup.insert(transfer.to.clone());
+                }
+                Item::Mint(mint) => {
+                    accounts_to_lookup.insert(mint.to.clone());
+                }
+                Item::Burn(burn) => {
+                    accounts_to_lookup.insert(burn.from.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let owners = resolve_account_owners(&foundational_store, &accounts_to_lookup);
+
+    for instruction in &mut instructions {
+        if let Some(ref mut item) = instruction.item {
+            match item {
+                Item::Transfer(ref mut transfer) => {
+                    if let Some(from_owner) = owners.get(&transfer.from) {
+                        transfer.from_owner = from_owner.clone();
+                    }
+                    if let Some(to_owner) = owners.get(&transfer.to) {
+                        transfer.to_owner = to_owner.clone();
+                    }
+                }
+                Item::Mint(ref mut mint) => {
+                    if let Some(to_owner) = owners.get(&mint.to) {
+                        mint.to_owner = to_owner.clone();
+                    }
+                }
+                Item::Burn(ref mut burn) => {
+                    if let Some(from_owner) = owners.get(&burn.from) {
+                        burn.from_owner = from_owner.clone();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     Ok(SplInstructions { instructions })
+}
+
+fn resolve_account_owners(
+    foundational_store: &FoundationalStore,
+    accounts: &HashSet<String>,
+) -> HashMap<String, String> {
+    let mut results = HashMap::with_capacity(accounts.len());
+    if accounts.is_empty() {
+        return results;
+    }
+
+    let account_bytes: Vec<Vec<u8>> = accounts
+        .iter()
+        .filter_map(|account| bs58::decode(account).into_vec().ok())
+        .collect();
+
+    let resp = foundational_store.get_all(&account_bytes);
+
+    for entry in resp.entries {
+        let Some(get_response) = entry.response else { continue; };
+        if get_response.response != ResponseCode::Found as i32 { continue; }
+        let Some(value) = get_response.value else { continue; };
+        let Ok(account_owner) = AccountOwner::decode(value.value.as_slice()) else { continue; };
+
+        let account_b58 = bs58::encode(&entry.key).into_string();
+        let owner_b58 = bs58::encode(&account_owner.owner).into_string();
+        results.insert(account_b58, owner_b58);
+    }
+
+    results
 }
 
 /// Iterates over successful transactions in given block and take ownership.
@@ -89,15 +172,16 @@ fn process_instruction(output: &mut OutputInstructions, compile_instruction: &In
 fn process_inner_instruction(
     compile_instruction: &InstructionView,
     trx_hash: &String,
-    meta: &TransactionStatusMeta,
+    _meta: &TransactionStatusMeta,
     output: &mut OutputInstructions,
 ) {
     for inner in compile_instruction.inner_instructions() {
         match inner.program_id().to_string().as_ref() {
             SOLANA_TOKEN_PROGRAM_KEG | SOLANA_TOKEN_PROGRAM_ZQB => {
-                match process_token_instruction(output, &inner, meta) {
+                match process_token_instruction(output, &inner, _meta) {
                     Err(err) => {
-                        panic!("trx_hash {} process token instructions {}", trx_hash, err);
+                        panic!("trx_hash {} process token instructions!
+                         {}", trx_hash, err);
                     }
                     _ => {}
                 }
@@ -110,10 +194,15 @@ fn process_inner_instruction(
 fn process_token_instruction(
     output: &mut OutputInstructions,
     instruction: &InstructionView,
-    meta: &TransactionStatusMeta,
+    _meta: &TransactionStatusMeta,
 ) -> Result<(), Error> {
     match TokenInstruction::unpack(&instruction.data()) {
         Err(err) => {
+            if let Some(first_byte) = instruction.data().first() {
+                if *first_byte > 39 {
+                    return Ok(());
+                }
+            }
             return Err(anyhow::anyhow!("unpacking token instruction: {}", err));
         }
         Ok(token_instruction) => match token_instruction {
@@ -154,6 +243,8 @@ fn process_token_instruction(
                         from: source.to_string(),
                         to: destination.to_string(),
                         amount: amt,
+                        from_owner: String::new(),
+                        to_owner: String::new(),
                     }));
                 }
             }
@@ -167,6 +258,8 @@ fn process_token_instruction(
                         from: source.to_string(),
                         to: destination.to_string(),
                         amount: amt,
+                        from_owner: String::new(),
+                        to_owner: String::new(),
                     }));
                 }
             }
@@ -179,6 +272,7 @@ fn process_token_instruction(
                     mint_address: mint.to_string(),
                     to: account_to.to_string(),
                     amount: amt,
+                    to_owner: String::new(),
                 }));
             }
 
@@ -189,8 +283,11 @@ fn process_token_instruction(
                     mint_address: mint.to_string(),
                     from: account_from.to_string(),
                     amount: amt,
+                    from_owner: String::new(),
                 }));
             }
+
+            
             TokenInstruction::InitializeAccount {} => {
                 let mint = &instruction.accounts()[1];
 
